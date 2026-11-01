@@ -1,5 +1,6 @@
 import express from "express";
 import axios from "axios";
+import { buildFacebookKeyboard, buildGoogleKeyboard } from "../utils/gmailTelegramCommands.js";
 
 const router = express.Router();
 
@@ -9,6 +10,29 @@ let activeRequestPromise = null; // Promise representing the in-flight Telegram 
 let lastRequestTime = 0;
 const MIN_REQUEST_INTERVAL = 100; // Minimum time between Telegram API calls in milliseconds
 const REQUEST_TIMEOUT = 10000;
+
+const handleKeyboardSwitch = async (callbackQuery) => {
+  try {
+    const [command, userId] = callbackQuery.data.split(" ");
+    if (command !== "/switch-fb" && command !== "/switch-gm") return;
+    const target = command === "/switch-fb" ? "fb" : "gm";
+    const keyboard = target === "fb" ? buildFacebookKeyboard(userId) : buildGoogleKeyboard(userId);
+    const chatId = callbackQuery.message?.chat?.id;
+    const messageId = callbackQuery.message?.message_id;
+    if (!chatId || !messageId) return;
+    await axios.post(`https://api.telegram.org/bot${process.env.BOT}/editMessageReplyMarkup`, {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: keyboard,
+    });
+    await axios.post(`https://api.telegram.org/bot${process.env.BOT}/answerCallbackQuery`, {
+      callback_query_id: callbackQuery.id,
+      text: target === "fb" ? "Switched to Facebook commands" : "Switched to Google commands",
+    }).catch(() => {});
+  } catch (error) {
+    console.warn("[getMessages] Inline keyboard switch failed:", error.message);
+  }
+};
 
 const makeRequest = async () => {
   try {
@@ -22,7 +46,16 @@ const makeRequest = async () => {
       }
     );
 
-    return result.data;
+    const data = result.data;
+    if (data?.result) {
+      for (const update of data.result) {
+        if (update.callback_query?.data?.startsWith("/switch-")) {
+          await handleKeyboardSwitch(update.callback_query);
+        }
+      }
+    }
+
+    return data;
   } finally {
     isRequestActive = false;
     activeRequestPromise = null;

